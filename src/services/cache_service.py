@@ -2,21 +2,21 @@ import json
 import hashlib
 import redis
 from typing import Any, Dict, Optional
-from src.config.settings import settings
+from src.config._environment import Environment
 
 
 class CacheService:
-    def __init__(self):
-        self.use_cache = settings.USE_CACHE
-        self.expiration = settings.CACHE_EXPIRATION
+    def __init__(self, environment: Environment):
+        self.use_cache = environment.USE_CACHE
+        self.expiration = environment.CACHE_EXPIRATION
         self.redis_client = None
 
         if self.use_cache:
             try:
                 self.redis_client = redis.Redis(
-                    host=settings.REDIS_HOST,
-                    port=settings.REDIS_PORT,
-                    password=settings.REDIS_PASSWORD or None,
+                    host=environment.REDIS_HOST,
+                    port=environment.REDIS_PORT,
+                    password=environment.REDIS_PASSWORD or None,
                     decode_responses=True,
                 )
                 # Test connection
@@ -73,7 +73,3 @@ class CacheService:
         except Exception as e:
             print(f"Error caching response: {str(e)}")
             return False
-
-
-# Create global cache service instance
-cache_service = CacheService()

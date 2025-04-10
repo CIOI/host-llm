@@ -1,14 +1,14 @@
 import torch
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 from transformers import AutoModelForCausalLM, AutoTokenizer
-from src.config.settings import settings
 from src.models.llm_models import model_registry, LLMModel
+from src.config._environment import Environment
 
 
 class HuggingFaceController:
-    def __init__(self):
-        self.device = settings.DEVICE
-        self.api_token = settings.HF_API_TOKEN
+    def __init__(self, environment: Environment):
+        self.device = environment.DEVICE
+        self.api_token = environment.HF_API_TOKEN
 
     async def load_model(self, model_id: str) -> Optional[LLMModel]:
         """Load a model from Hugging Face."""
@@ -77,65 +77,53 @@ class HuggingFaceController:
             return False
 
     async def generate_text(
-        self, model_id: str, prompt: str, generation_params: Dict[str, Any]
-    ) -> Dict[str, Any]:
+        self, model_info: LLMModel, prompt: str, **kwargs
+    ) -> List[str]:
         """Generate text using a loaded model."""
         try:
-            # Load model if not already loaded
-            model_info = model_registry.get_model(model_id)
-            if not model_info:
-                return {"error": f"Model {model_id} not found"}
-
-            if not model_info.loaded:
-                model_info = await self.load_model(model_id)
-                if not model_info:
-                    return {"error": f"Failed to load model {model_id}"}
-
-            model = model_info.model_instance
             tokenizer = model_info.tokenizer_instance
+            model = model_info.model_instance
 
-            # Set up generation parameters
-            max_length = min(
-                generation_params.get("max_length", 50), model_info.max_length
-            )
+            # 입력 준비
+            inputs = tokenizer(prompt, return_tensors="pt")
 
-            # Encode the prompt
-            inputs = tokenizer(prompt, return_tensors="pt").to(self.device)
+            # Gemma 모델용 특별 처리
+            if "gemma" in model_info.name.lower():
+                # 명시적으로 어텐션 마스크 설정
+                input_ids = inputs["input_ids"].to(self.device)
+                attention_mask = torch.ones_like(input_ids)
 
-            # Generate text
-            outputs = model.generate(
-                inputs["input_ids"],
-                max_length=max_length,
-                num_return_sequences=generation_params.get("num_return_sequences", 1),
-                temperature=generation_params.get("temperature", 1.0),
-                top_p=generation_params.get("top_p", 0.9),
-                top_k=generation_params.get("top_k", 50),
-                do_sample=generation_params.get("do_sample", True),
-                pad_token_id=tokenizer.eos_token_id,
-            )
+                # 생성 파라미터 조정
+                outputs = model.generate(
+                    input_ids=input_ids,
+                    attention_mask=attention_mask,
+                    max_length=kwargs.get("max_length", 100),
+                    do_sample=kwargs.get("do_sample", True),
+                    temperature=max(kwargs.get("temperature", 0.7), 0.1),  # 최소값 설정
+                    top_p=min(max(kwargs.get("top_p", 0.9), 0.1), 0.99),  # 범위 제한
+                    num_return_sequences=kwargs.get("num_return_sequences", 1),
+                    pad_token_id=tokenizer.eos_token_id,  # 패드 토큰 명시적 설정
+                )
+            else:
+                # 다른 모델용 기존 처리
+                inputs = inputs.to(self.device)
+                outputs = model.generate(
+                    **inputs,
+                    max_length=kwargs.get("max_length", 100),
+                    do_sample=kwargs.get("do_sample", True),
+                    temperature=kwargs.get("temperature", 0.7),
+                    top_p=kwargs.get("top_p", 0.9),
+                    top_k=kwargs.get("top_k", 50),
+                    num_return_sequences=kwargs.get("num_return_sequences", 1),
+                )
 
-            # Decode the output
+            # 출력 디코딩
             generated_texts = [
                 tokenizer.decode(output, skip_special_tokens=True) for output in outputs
             ]
+            return generated_texts
 
-            # Remove prompt from generated texts if present
-            if prompt and all(text.startswith(prompt) for text in generated_texts):
-                generated_texts = [
-                    text[len(prompt) :].strip() for text in generated_texts
-                ]
-
-            return {
-                "generated_texts": generated_texts,
-                "model_used": model_id,
-                "prompt": prompt,
-                "generation_params": generation_params,
-            }
         except Exception as e:
-            # Log the error
-            print(f"Error generating text with model {model_id}: {str(e)}")
-            return {"error": str(e)}
-
-
-# Create global controller instance
-huggingface_controller = HuggingFaceController()
+            # 오류 처리
+            print(f"Error generating text with model {model_info.name}: {str(e)}")
+            return [f"Error: {str(e)}"]

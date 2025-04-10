@@ -1,13 +1,20 @@
 from typing import Dict, Any, List, Optional
-from src.controllers.huggingface import huggingface_controller
+from src.controllers.huggingface import HuggingFaceController
 from src.models.llm_models import model_registry
-from src.services.cache_service import cache_service
-from src.config.settings import settings
+from src.services.cache_service import CacheService
+from src.config._environment import Environment
 
 
 class LLMService:
-    def __init__(self):
-        self.default_model = settings.DEFAULT_MODEL
+    def __init__(
+        self,
+        environment: Environment,
+        cache_service: CacheService,
+        huggingface_controller: HuggingFaceController,
+    ):
+        self.default_model = environment.DEFAULT_MODEL
+        self.huggingface_controller = huggingface_controller
+        self.cache_service = cache_service
 
     async def list_models(self) -> List[Dict[str, Any]]:
         """List all available models."""
@@ -40,7 +47,7 @@ class LLMService:
                 "name": model_info.name,
             }
 
-        loaded_model = await huggingface_controller.load_model(model_id)
+        loaded_model = await self.huggingface_controller.load_model(model_id)
         if not loaded_model:
             return {"error": f"Failed to load model {model_id}"}
 
@@ -48,7 +55,7 @@ class LLMService:
 
     async def unload_model(self, model_id: str) -> Dict[str, Any]:
         """Unload a model to free resources."""
-        success = await huggingface_controller.unload_model(model_id)
+        success = await self.huggingface_controller.unload_model(model_id)
         if not success:
             return {"error": f"Failed to unload model {model_id}"}
 
@@ -67,7 +74,7 @@ class LLMService:
             return {"error": f"Model {model_id} not found"}
 
         # Check cache first
-        cached_response = await cache_service.get_cached_response(
+        cached_response = await self.cache_service.get_cached_response(
             model_id, prompt, generation_params
         )
 
@@ -75,18 +82,14 @@ class LLMService:
             return cached_response
 
         # Generate text using the controller
-        result = await huggingface_controller.generate_text(
+        result = await self.huggingface_controller.generate_text(
             model_id, prompt, generation_params
         )
 
         # Cache the result if successful
         if "error" not in result:
-            await cache_service.cache_response(
+            await self.cache_service.cache_response(
                 model_id, prompt, generation_params, result
             )
 
         return result
-
-
-# Create global service instance
-llm_service = LLMService()

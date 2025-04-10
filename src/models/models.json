@@ -1,0 +1,30 @@
+[
+    {
+        "model_id": "meta-llama/Llama-3.1-8B",
+        "task": "text-generation",
+        "name": "Meta-Llama-3.1-8B",
+        "description": "Meta's Llama 3.1 model (8B parameters)",
+        "max_length": 4096
+    },
+    {
+        "model_id": "meta-llama/Llama-3.2-3B",
+        "task": "text-generation",
+        "name": "Llama-3.2-3B",
+        "description": "Meta's Llama 3.2 model (3B parameters)",
+        "max_length": 4096
+    },
+    {
+        "model_id": "google/gemma-3-1b-it",
+        "task": "text-generation",
+        "name": "Gemma-3-1B-IT",
+        "description": "Google's Gemma 3 instruction-tuned model (1B parameters)",
+        "max_length": 8192
+    },
+    {
+        "model_id": "google/gemma-3-4b-it",
+        "task": "image-text-to-text",
+        "name": "Gemma-3-4B-IT",
+        "description": "Google's Gemma 3 instruction-tuned model (4B parameters)",
+        "max_length": 8192
+    }
+]

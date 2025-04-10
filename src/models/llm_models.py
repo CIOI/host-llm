@@ -1,43 +1,19 @@
 from typing import Dict, List, Optional, Any
 from pydantic import BaseModel
+from typing import Literal
+import json
+from findup import glob
+from os.path import dirname, join
 
 # Predefined models that are supported by the API
-SUPPORTED_MODELS = {
-    "gpt2": {
-        "name": "gpt2",
-        "description": "OpenAI GPT-2 (small version, 124M parameters)",
-        "max_length": 1024,
-    },
-    "gpt2-medium": {
-        "name": "gpt2-medium",
-        "description": "OpenAI GPT-2 Medium (355M parameters)",
-        "max_length": 1024,
-    },
-    "gpt2-large": {
-        "name": "gpt2-large",
-        "description": "OpenAI GPT-2 Large (774M parameters)",
-        "max_length": 1024,
-    },
-    "distilgpt2": {
-        "name": "distilgpt2",
-        "description": "Distilled version of GPT-2 (82M parameters)",
-        "max_length": 1024,
-    },
-    "EleutherAI/gpt-neo-125M": {
-        "name": "EleutherAI/gpt-neo-125M",
-        "description": "EleutherAI's GPT-Neo (125M parameters)",
-        "max_length": 2048,
-    },
-    "TheBloke/FashionGPT-70B-v1.2-GGUF": {
-        "name": "TheBloke/FashionGPT-70B-v1.2-GGUF",
-        "description": "TheBloke's FashionGPT model (70 billion parameters)",
-        "max_length": 2048,
-    },
-}
 
 
 class LLMModel(BaseModel):
     name: str
+    task: Literal[
+        "image-text-to-text",
+        "text-generation",
+    ] = "text-generation"
     description: str
     max_length: int
     loaded: bool = False
@@ -51,13 +27,30 @@ class ModelRegistry:
         self._initialize_models()
 
     def _initialize_models(self):
-        """Initialize supported models."""
-        for model_id, model_info in SUPPORTED_MODELS.items():
-            self.models[model_id] = LLMModel(
-                name=model_info["name"],
-                description=model_info["description"],
-                max_length=model_info["max_length"],
-            )
+        """Initialize models from models.json file."""
+        json_path = join(dirname(glob("src/app.py")), "models/models.json")
+
+        try:
+            with open(json_path, "r") as f:
+                models_data = json.load(f)
+
+            for model_data in models_data:
+                model_id = model_data.get("model_id")
+                print(model_id)
+                if not model_id:
+                    continue
+
+                self.models[model_id] = LLMModel(
+                    name=model_data.get("name", model_id),
+                    description=model_data.get("description", ""),
+                    max_length=model_data.get("max_length", 1024),
+                    task=model_data.get("task", "text-generation"),
+                )
+
+        except Exception as e:
+            print(f"Error loading models from JSON: {str(e)}")
+            # Fallback to empty registry
+            pass
 
     def get_model(self, model_id: str) -> Optional[LLMModel]:
         """Get a model by ID."""
@@ -72,6 +65,7 @@ class ModelRegistry:
                 "description": model.description,
                 "loaded": model.loaded,
                 "max_length": model.max_length,
+                "task": model.task,
             }
             for model_id, model in self.models.items()
         ]
@@ -82,6 +76,7 @@ class ModelRegistry:
             name=model_info.get("name", model_id),
             description=model_info.get("description", ""),
             max_length=model_info.get("max_length", 1024),
+            task=model_info.get("task", "text-generation"),
         )
         self.models[model_id] = model
         return model

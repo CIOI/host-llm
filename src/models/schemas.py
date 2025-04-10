@@ -17,7 +17,7 @@ class TextGenerationRequest(BaseModel):
     do_sample: Optional[bool] = Field(True, description="Whether to use sampling")
 
     class Config:
-        schema_extra = {
+        json_schema_extra = {
             "example": {
                 "prompt": "Once upon a time",
                 "model": "gpt2",
@@ -38,7 +38,7 @@ class TextGenerationResponse(BaseModel):
     )
 
     class Config:
-        schema_extra = {
+        json_schema_extra = {
             "example": {
                 "generated_texts": [
                     "Once upon a time in a faraway land, there lived a princess..."
@@ -54,4 +54,4 @@ class ErrorResponse(BaseModel):
     error: str = Field(..., description="Error message")
 
     class Config:
-        schema_extra = {"example": {"error": "Model not found or not available"}}
+        json_schema_extra = {"example": {"error": "Model not found or not available"}}
