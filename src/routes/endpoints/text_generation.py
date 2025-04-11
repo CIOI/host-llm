@@ -31,7 +31,6 @@ class TextGenerationRouter:
             # Call LLM service
             result = await self.llm_service.generate_text(
                 model_id=request.model,
-                model_info=model_info,
                 prompt=request.prompt,
                 **generation_params,
             )

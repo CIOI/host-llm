@@ -17,8 +17,7 @@ class LLMModel(BaseModel):
     description: str
     max_length: int
     loaded: bool = False
-    model_instance: Optional[Any] = None
-    tokenizer_instance: Optional[Any] = None
+    pipeline: Optional[Any] = None
 
 
 class ModelRegistry:

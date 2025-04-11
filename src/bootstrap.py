@@ -27,10 +27,10 @@ async def initialize_async_resources(application: Application):
 def configure_routes(app: FastAPI, application: Application) -> FastAPI:
     logger = application.logger()
     logger.info("start configure routes")
-
     router = APIRouter()
+    huggingface_router = application.huggingface.router()
     # API 라우터 설정
-    router.include_router(application.router().register_routes(APIRouter()))
+    router.include_router(huggingface_router.register_routes(APIRouter()))
     app.include_router(router)
 
     logger.info("configure routes completed")

@@ -1,9 +1,11 @@
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Union
 from pydantic import BaseModel, Field
 
 
 class TextGenerationRequest(BaseModel):
-    prompt: str = Field(..., description="The input text prompt for generation")
+    prompt: Union[str, List, Dict[str, Any]] = Field(
+        ..., description="The input text prompt for generation"
+    )
     model: Optional[str] = Field(None, description="Model to use for generation")
     max_length: Optional[int] = Field(
         50, description="Maximum length of generated text"
@@ -28,11 +30,11 @@ class TextGenerationRequest(BaseModel):
 
 
 class TextGenerationResponse(BaseModel):
-    generated_texts: List[str] = Field(
+    generated_texts: List[Any] = Field(
         ..., description="List of generated text sequences"
     )
     model_used: str = Field(..., description="Model that was used for generation")
-    prompt: str = Field(..., description="Original prompt")
+    prompt: Union[str, List, Dict[str, Any]] = Field(..., description="Original prompt")
     generation_params: Dict[str, Any] = Field(
         ..., description="Parameters used for generation"
     )

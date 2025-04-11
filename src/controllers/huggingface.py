@@ -1,19 +1,33 @@
 import torch
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional
 from transformers import AutoModelForCausalLM, AutoTokenizer
-from src.models.llm_models import model_registry, LLMModel
+from src.models.llm_models import ModelRegistry, LLMModel
 from src.config._environment import Environment
+from src.config._logger import LoggerService
+from transformers import pipeline
 
 
 class HuggingFaceController:
-    def __init__(self, environment: Environment):
+    def __init__(
+        self,
+        environment: Environment,
+        logger: LoggerService,
+        model_registry: ModelRegistry,
+    ):
         self.device = environment.DEVICE
         self.api_token = environment.HF_API_TOKEN
+        self.logger = logger
+        self.model_registry = model_registry
+        self.torch_dtype = (
+            torch.float16
+            if self.device == "cuda" or self.device == "mps"
+            else torch.float32
+        )
 
     async def load_model(self, model_id: str) -> Optional[LLMModel]:
-        """Load a model from Hugging Face."""
+        """Load a model from Hugging Face using pipeline API."""
         try:
-            model_info = model_registry.get_model(model_id)
+            model_info = self.model_registry.get_model(model_id)
             if not model_info:
                 return None
 
@@ -21,43 +35,37 @@ class HuggingFaceController:
             if model_info.loaded:
                 return model_info
 
-            # Load tokenizer and model
-            tokenizer = AutoTokenizer.from_pretrained(
-                model_id, use_auth_token=self.api_token
+            # Get model's task
+            task = getattr(model_info, "task", "text-generation")
+
+            # Create pipeline directly based on task
+            model_pipe = pipeline(
+                task,
+                model=model_id,
+                device=self.device,
+                torch_dtype=self.torch_dtype,
+                token=self.api_token,
             )
 
-            # Set torch dtype based on device
-            torch_dtype = None
-            if self.device == "cuda":
-                torch_dtype = torch.float16
-            elif self.device == "mps":
-                # For Apple Silicon GPU
-                torch_dtype = torch.float16
-
-            model = AutoModelForCausalLM.from_pretrained(
-                model_id,
-                use_auth_token=self.api_token,
-                torch_dtype=torch_dtype,
-            )
-
-            # Move model to the appropriate device
-            model.to(self.device)
-
-            # Update model registry
+            # Store pipeline in model info
+            model_info.pipeline = model_pipe
             model_info.loaded = True
-            model_info.model_instance = model
-            model_info.tokenizer_instance = tokenizer
 
+            print(f"Successfully loaded {model_id}")
             return model_info
+
         except Exception as e:
             # Log the error
             print(f"Error loading model {model_id}: {str(e)}")
+            import traceback
+
+            traceback.print_exc()
             return None
 
     async def unload_model(self, model_id: str) -> bool:
         """Unload a model to free memory."""
         try:
-            model_info = model_registry.get_model(model_id)
+            model_info = self.model_registry.get_model(model_id)
             if not model_info or not model_info.loaded:
                 return False
 
@@ -66,8 +74,7 @@ class HuggingFaceController:
                 torch.cuda.empty_cache()
 
             # Reset model instances
-            model_info.model_instance = None
-            model_info.tokenizer_instance = None
+            model_info.pipeline = None
             model_info.loaded = False
 
             return True
@@ -77,53 +84,168 @@ class HuggingFaceController:
             return False
 
     async def generate_text(
-        self, model_info: LLMModel, prompt: str, **kwargs
-    ) -> List[str]:
-        """Generate text using a loaded model."""
+        self, model_id: str, prompt: str, generation_params: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Generate text using a loaded model with pipeline API."""
         try:
-            tokenizer = model_info.tokenizer_instance
-            model = model_info.model_instance
+            # Get model info
+            model_info = self.model_registry.get_model(model_id)
+            if not model_info:
+                return {"error": f"Model {model_id} not found"}
 
-            # 입력 준비
-            inputs = tokenizer(prompt, return_tensors="pt")
+            # Load model if not already loaded
+            if not model_info.loaded:
+                model_info = await self.load_model(model_id)
+                if not model_info:
+                    return {"error": f"Failed to load model {model_id}"}
 
-            # Gemma 모델용 특별 처리
-            if "gemma" in model_info.name.lower():
-                # 명시적으로 어텐션 마스크 설정
-                input_ids = inputs["input_ids"].to(self.device)
-                attention_mask = torch.ones_like(input_ids)
+            # Get pipeline from model_info
+            if not model_info.pipeline:
+                return {"error": f"Pipeline not initialized for model {model_id}"}
 
-                # 생성 파라미터 조정
-                outputs = model.generate(
-                    input_ids=input_ids,
-                    attention_mask=attention_mask,
-                    max_length=kwargs.get("max_length", 100),
-                    do_sample=kwargs.get("do_sample", True),
-                    temperature=max(kwargs.get("temperature", 0.7), 0.1),  # 최소값 설정
-                    top_p=min(max(kwargs.get("top_p", 0.9), 0.1), 0.99),  # 범위 제한
-                    num_return_sequences=kwargs.get("num_return_sequences", 1),
-                    pad_token_id=tokenizer.eos_token_id,  # 패드 토큰 명시적 설정
+            # Get model's task and call appropriate method
+            task = getattr(model_info, "task", "text-generation")
+
+            if task == "text-generation":
+                result = await self._generate_text_with_text_generation(
+                    model_info, prompt, generation_params
+                )
+            elif task == "image-text-to-text":
+                result = await self._generate_text_with_image_text_to_text(
+                    model_info, prompt, generation_params
                 )
             else:
-                # 다른 모델용 기존 처리
-                inputs = inputs.to(self.device)
-                outputs = model.generate(
-                    **inputs,
-                    max_length=kwargs.get("max_length", 100),
-                    do_sample=kwargs.get("do_sample", True),
-                    temperature=kwargs.get("temperature", 0.7),
-                    top_p=kwargs.get("top_p", 0.9),
-                    top_k=kwargs.get("top_k", 50),
-                    num_return_sequences=kwargs.get("num_return_sequences", 1),
-                )
+                return {"error": f"Unsupported task type: {task}"}
 
-            # 출력 디코딩
-            generated_texts = [
-                tokenizer.decode(output, skip_special_tokens=True) for output in outputs
-            ]
-            return generated_texts
+            # Add common response fields
+            result.update(
+                {
+                    "model_used": model_id,
+                    "prompt": prompt,
+                    "generation_params": generation_params,
+                }
+            )
+
+            return result
 
         except Exception as e:
-            # 오류 처리
-            print(f"Error generating text with model {model_info.name}: {str(e)}")
-            return [f"Error: {str(e)}"]
+            # Log the error
+            print(f"Error generating text with model {model_id}: {str(e)}")
+            import traceback
+
+            traceback.print_exc()
+            return {"error": str(e)}
+
+    async def _generate_text_with_text_generation(
+        self, model_info: LLMModel, prompt: Any, generation_params: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Generate text using text-generation pipeline."""
+        try:
+            model_pipe = model_info.pipeline
+
+            # Set up generation parameters
+            max_length = min(
+                generation_params.get("max_length", 50), model_info.max_length
+            )
+
+            pipe_params = {
+                "max_length": max_length,
+                "num_return_sequences": generation_params.get(
+                    "num_return_sequences", 1
+                ),
+                "temperature": max(generation_params.get("temperature", 1.0), 0.1),
+                "top_p": max(generation_params.get("top_p", 0.9), 0.05),
+                "top_k": generation_params.get("top_k", 50),
+                "do_sample": generation_params.get("do_sample", True),
+            }
+
+            # 프롬프트 타입에 따른 처리
+            if isinstance(prompt, str):
+                # 문자열 프롬프트 - 일반적인 텍스트 생성
+                outputs = model_pipe(prompt, **pipe_params)
+
+                # Extract generated texts
+                generated_texts = [item["generated_text"] for item in outputs]
+
+                # Remove prompt from generated texts if present
+                if prompt and all(text.startswith(prompt) for text in generated_texts):
+                    generated_texts = [
+                        text[len(prompt) :].strip() for text in generated_texts
+                    ]
+            else:
+                # 구조화된 프롬프트 (리스트, 딕셔너리 등) - 채팅 형식
+                # 채팅 모델은 다른 형식으로 출력하기 때문에 후처리가 다릅니다
+                outputs = model_pipe(prompt, **pipe_params)
+
+                # 다양한 출력 형식 처리
+                if isinstance(outputs, list) and len(outputs) > 0:
+                    if isinstance(outputs[0], dict) and "generated_text" in outputs[0]:
+                        generated_texts = [item["generated_text"] for item in outputs]
+                    else:
+                        generated_texts = [str(item) for item in outputs]
+                elif isinstance(outputs, dict) and "generated_text" in outputs:
+                    generated_texts = [outputs["generated_text"]]
+                elif isinstance(outputs, str):
+                    generated_texts = [outputs]
+                else:
+                    generated_texts = [str(outputs)]
+
+            return {"generated_texts": generated_texts}
+
+        except Exception as e:
+            print(f"Error in text generation: {str(e)}")
+            import traceback
+
+            traceback.print_exc()
+            return {"error": str(e)}
+
+    async def _generate_text_with_image_text_to_text(
+        self, model_info: LLMModel, prompt: Any, generation_params: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Generate text using image-text-to-text pipeline."""
+        try:
+            model_pipe = model_info.pipeline
+
+            # Set up generation parameters
+            max_length = min(
+                generation_params.get("max_length", 50), model_info.max_length
+            )
+
+            pipe_params = {
+                "max_new_tokens": max_length,
+                "do_sample": generation_params.get("do_sample", True),
+                "temperature": max(generation_params.get("temperature", 1.0), 0.1),
+                "top_p": max(generation_params.get("top_p", 0.9), 0.05),
+            }
+
+            # Handle different prompt types
+            if isinstance(prompt, str):
+                # Simple text prompt
+                outputs = model_pipe(prompt, **pipe_params)
+            else:
+                # Assuming properly formatted multimodal prompt
+                outputs = model_pipe(prompt, **pipe_params)
+
+            # Handle various output formats
+            if (
+                isinstance(outputs, list)
+                and len(outputs) > 0
+                and "generated_text" in outputs[0]
+            ):
+                generated_texts = [item["generated_text"] for item in outputs]
+            elif isinstance(outputs, dict) and "generated_text" in outputs:
+                generated_texts = [outputs["generated_text"]]
+            elif isinstance(outputs, str):
+                generated_texts = [outputs]
+            else:
+                # Last resort handling
+                generated_texts = [str(outputs)]
+
+            return {"generated_texts": generated_texts}
+
+        except Exception as e:
+            print(f"Error in multimodal generation: {str(e)}")
+            import traceback
+
+            traceback.print_exc()
+            return {"error": str(e)}
